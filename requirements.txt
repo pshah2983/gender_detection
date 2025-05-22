@@ -1,0 +1,14 @@
+tensorflow==2.16.1
+torch==2.2.1
+torchvision==0.17.1
+opencv-python==4.8.1.78
+numpy==1.26.2
+scikit-learn==1.3.2
+keras==3.10.0
+matplotlib==3.8.2
+seaborn==0.13.2
+tqdm
+tensorboard==2.16.2
+onnx
+onnxruntime
+GPUtil
