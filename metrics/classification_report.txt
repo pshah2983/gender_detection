@@ -1,8 +1,14 @@
+Test Set Evaluation Results
+==========================
+
+Total images evaluated: 20001
+Processing time: 23.59 seconds
+
               precision    recall  f1-score   support
 
-        Male       0.93      0.90      0.91      2505
-      Female       0.89      0.93      0.91      2316
+      Female       0.99      0.99      0.99     11542
+        Male       0.99      0.99      0.99      8459
 
-    accuracy                           0.91      4821
-   macro avg       0.91      0.91      0.91      4821
-weighted avg       0.91      0.91      0.91      4821
+    accuracy                           0.99     20001
+   macro avg       0.99      0.99      0.99     20001
+weighted avg       0.99      0.99      0.99     20001

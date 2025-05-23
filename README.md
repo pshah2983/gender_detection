@@ -1,106 +1,185 @@
-# Gender Detection System using Deep Learning
+# Real-Time Gender Detection System
 
-This project implements a gender detection system using computer vision and deep learning (TensorFlow/Keras). It can detect gender from images, video files, webcam, or RTSP streams, and save detection results to a text file.
+A high-performance deep learning system for real-time gender detection using PyTorch and OpenCV. The system achieves 99.04% accuracy on a large-scale dataset and supports real-time detection through webcam, image files, and video sources.
+
+## Project Overview
+
+This project implements a gender detection system using a ResNet50 model trained on a diverse dataset. The system can:
+- Perform real-time gender detection through webcam
+- Process individual images
+- Analyze video files
+- Generate detailed performance metrics and visualizations
+
+## Dataset
+
+The model is trained on a comprehensive gender detection dataset containing over 200k+ face images:
+
+
+- **Image Characteristics**:
+  - High-quality facial images
+  - Diverse age groups
+  - Various ethnicities
+  - Different lighting conditions
+  - Multiple facial expressions
+  - Various head poses
+
+- **Dataset Organization**:
+  ```
+  Dataset/
+  ├── Train/
+  │   ├── Female/
+  │   └── Male/
+  ├── Validation/
+  │   ├── Female/
+  │   └── Male/
+  └── Test/
+      ├── Female/
+      └── Male/
+  ```
+
+- **Dataset Access**: 
+  <div align="center">
+  
+  [![Download Dataset](https://img.shields.io/badge/Download-Dataset-blue?style=for-the-badge&logo=kaggle)](https://www.kaggle.com/datasets/yasserhessein/gender-dataset)
+  
+  </div>
+
+## Model Performance
+
+The model achieves exceptional performance metrics:
+
+### Test Set Evaluation Results
+- Overall Accuracy: 99.04%
+- ROC AUC Score: 0.9994
+- Dataset Size: 20,001 test images
+- Processing Speed: ~1.22ms per image on NVIDIA L4 GPU
+
+### Class-wise Performance
+```
+              precision    recall  f1-score   support
+Female        0.99      0.99      0.99     11,542
+Male          0.99      0.99      0.99      8,459
+```
+
+### Performance Visualizations
+
+#### Training Progress
+![Training Progress](performance_analysis/training_progress.png)
+*Shows the model's training and validation accuracy over epochs, highlighting the consistently high performance and minimal generalization gap.*
+
+#### Learning Curves
+![Learning Curves](performance_analysis/combined_training_metrics.png)
+*Displays the loss curves, accuracy progress, learning rate evolution, and generalization gap analysis.*
+
+#### Model Evaluation
+![ROC Curve](metrics/roc_curve.png)
+*ROC curve showing the model's excellent discrimination ability with an AUC of 0.9994.*
+
+![Confusion Matrix](metrics/confusion_matrix.png)
+*Confusion matrix demonstrating balanced performance across both gender classes.*
 
 ## Features
-- Train a gender classification model using the UTKFace dataset
-- Detect gender in single images
-- Real-time gender detection using webcam
-- Gender detection from video files or RTSP streams
-- Save detection results (frame, bounding box, gender, confidence) to a text file
 
-## Project Structure
-```
-gender_detection_model.h5         # Trained model (generated after training)
-gender_detection.py               # Main script for detection
-train_model.py                    # Script to train the model
-requirements.txt                  # Python dependencies
-UTKFace/                          # Dataset (with part1, part2, part3 subfolders)
-README.md                         # This file
-```
+1. **Multiple Detection Modes**:
+   - Real-time webcam detection
+   - Single image processing
+   - Video file analysis
+   
 
-## Setup Instructions
+2. **High Performance**:
+   - GPU-accelerated inference
+   - Optimized batch processing
+   - Real-time FPS counter
+   - Processing statistics
 
-1. **Clone the repository and navigate to the project directory**
+3. **Visualization**:
+   - Bounding box detection
+   - Gender prediction labels
+   - Confidence scores
+   - Real-time FPS display
 
-2. **Install dependencies**
-```bash
-pip install -r requirements.txt
-```
+## Technical Implementation
 
-3. **Download and extract the UTKFace dataset**
-- Place the dataset in the `UTKFace/` directory, with images inside `part1/`, `part2/`, and `part3/` subfolders.
+### Model Architecture
+- Base Model: ResNet50
+- Final Layer: Custom FC layer for binary classification
+- Input Size: 224x224 RGB images
+- Output: Binary classification (Male/Female) with confidence scores
 
-## Training the Model
+### Key Components
+1. Face Detection:
+   - OpenCV's Haar Cascade Classifier
+   - Optimized for real-time performance
 
-To train the gender detection model on the UTKFace dataset:
-```bash
-python train_model.py
-```
-- The trained model will be saved as `gender_detection_model.h5` in the project directory.
+2. Gender Classification:
+   - PyTorch-based deep learning model
+   - Mixed precision inference
+   - CUDA optimization for GPU acceleration
 
-## Using the Gender Detection System
+3. Image Processing:
+   - Real-time frame processing
+   - Dynamic resizing and normalization
+   - Efficient memory management
 
-### 1. Detect Gender in a Single Image
-- Edit `gender_detection.py` and uncomment the single image detection section in the `__main__` block:
-```python
-image_path = "test_image.jpg"
-result_image, message = detect_gender(image_path)
-if result_image is not None:
-    cv2.imshow("Gender Detection", result_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-else:
-    print(message)
-```
-- Run:
-```bash
-python gender_detection.py
-```
+## Usage
 
-### 2. Real-Time Gender Detection (Webcam)
-- Uncomment the following in `gender_detection.py`:
-```python
-detect_gender_realtime()
-```
-- Run:
-```bash
-python gender_detection.py
-```
-- Press 'q' to quit the webcam window.
+1. **Installation**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### 3. Gender Detection on Video File or RTSP Stream
-- Uncomment and edit the following in `gender_detection.py`:
-```python
-# For video file:
-detect_gender_video("test_video.mp4", "detection_results.txt")
-# For RTSP stream:
-detect_gender_video("rtsp://username:password@ip_address:port/stream", "detection_results.txt")
-```
-- Run:
-```bash
-python gender_detection.py
-```
-- Detection results will be saved in `detection_results.txt` with columns: frame, x, y, w, h, gender, confidence.
+2. **Running the System**:
+   ```bash
+   python gender_detection.py
+   ```
 
-## Notes
-- The model expects face images of size 64x64x3 (RGB).
-- The UTKFace dataset filenames encode gender as 0 (male) and 1 (female).
-- The system uses OpenCV's Haar Cascade for face detection.
-- For best results, ensure good lighting and clear face visibility in input images/videos.
+3. **Menu Options**:
+   ```
+   Gender Detection Menu:
+   1. Real-time Webcam Detection
+   2. Image File Detection
+   3. Video File Detection
+   4. Exit
+   ```
 
 ## Requirements
-- Python 3.8+
-- TensorFlow 2.x
-- OpenCV
-- numpy
-- scikit-learn
-- keras
 
-Install all requirements with:
-```bash
-pip install -r requirements.txt
-```
+- Python 3.8+
+- PyTorch
+- OpenCV
+- CUDA-capable GPU (optional but recommended)
+- Other dependencies in requirements.txt
+
+## Performance Optimization
+
+The system is optimized for both CPU and GPU execution:
+- Batch processing for efficient GPU utilization
+- Non-blocking memory transfers
+- Mixed precision inference
+- CUDA stream synchronization
+- Efficient memory management
+- OpenCV optimization
+
+## Results and Metrics
+
+The model demonstrates excellent performance across various metrics:
+
+1. **Speed**:
+   - Real-time processing at high FPS
+   - Minimal latency
+   - Efficient batch processing
+
+2. **Accuracy**:
+   - 99.04% overall accuracy
+   - Balanced performance across genders
+   - High confidence predictions
+
+3. **Reliability**:
+   - Robust face detection
+   - Stable frame processing
+   - Consistent performance
+
 
 ## License
-This project is for educational and research purposes.
+
+This project is licensed under the MIT License - see the LICENSE file for details.

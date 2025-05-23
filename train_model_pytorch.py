@@ -1,355 +1,318 @@
-import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torchvision import models, transforms
-from PIL import Image
-import cv2
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, classification_report
+from torchvision import models, transforms, datasets
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+import os
+from datetime import datetime
+import csv
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
+from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
+import torch.cuda.amp as amp
 from tqdm import tqdm
-import csv
-from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
-from torch.cuda.amp import autocast, GradScaler
-import gc
-import GPUtil
+import torch.backends.cudnn as cudnn
 
-def print_gpu_utilization():
-    GPUs = GPUtil.getGPUs()
-    if GPUs:
-        gpu = GPUs[0]
-        print(f"GPU Memory Used: {gpu.memoryUsed}MB / {gpu.memoryTotal}MB ({gpu.memoryUtil*100:.1f}%)")
+def setup_directories():
+    """Create necessary directories for storing results"""
+    dirs = ['metrics', 'models', 'logs']
+    for dir in dirs:
+        os.makedirs(dir, exist_ok=True)
 
-class GenderDataset(Dataset):
-    def __init__(self, image_paths, labels, transform=None):
-        self.image_paths = image_paths
-        self.labels = labels
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        image = Image.open(img_path).convert('RGB')
-        label = self.labels[idx]
-
-        if self.transform:
-            image = self.transform(image)
-
-        return image, label
-
-def load_dataset(dataset_path):
-    image_paths = []
-    labels = []
+def plot_training_curves(train_losses, val_losses, train_accs, val_accs, save_dir='metrics'):
+    """Plot and save training curves"""
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.title('Loss Curves')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
     
-    for root, _, files in os.walk(dataset_path):
-        for filename in files:
-            if filename.endswith((".jpg", ".png")):
-                try:
-                    gender = int(filename.split("_")[1])
-                    if gender in [0, 1]:  # Validate gender label
-                        img_path = os.path.join(root, filename)
-                        image_paths.append(img_path)
-                        labels.append(gender)
-                except:
-                    continue
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accs, label='Training Accuracy')
+    plt.plot(val_accs, label='Validation Accuracy')
+    plt.title('Accuracy Curves')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
     
-    return image_paths, labels
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'training_curves.png'))
+    plt.close()
 
-def create_model(pretrained=True):
-    # Load pre-trained MobileNetV2
-    model = models.mobilenet_v2(pretrained=pretrained)
-    
-    # Modify the classifier for binary classification
-    num_ftrs = model.classifier[1].in_features
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=0.2),
-        nn.Linear(num_ftrs, 2)
-    )
-    return model
-
-def plot_confusion_matrix(y_true, y_pred, save_dir):
+def plot_confusion_matrix(y_true, y_pred, classes, save_dir='metrics'):
+    """Generate and save confusion matrix"""
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=classes, yticklabels=classes)
     plt.title('Confusion Matrix')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
     plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
     plt.close()
+    return cm
 
-def plot_roc_curve(y_true, y_score, save_dir):
-    fpr, tpr, _ = roc_curve(y_true, y_score)
-    roc_auc = auc(fpr, tpr)
-    plt.figure(figsize=(10, 8))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
-    plt.legend(loc="lower right")
-    plt.savefig(os.path.join(save_dir, 'roc_curve.png'))
-    plt.close()
-
-def plot_precision_recall_curve(y_true, y_score, save_dir):
-    precision, recall, _ = precision_recall_curve(y_true, y_score)
-    plt.figure(figsize=(10, 8))
-    plt.plot(recall, precision, color='darkorange', lw=2)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.savefig(os.path.join(save_dir, 'precision_recall_curve.png'))
-    plt.close()
-
-def plot_metrics(y_true, y_pred, y_scores, save_dir='metrics'):
-    os.makedirs(save_dir, exist_ok=True)
+def train_model():
+    # Setup directories
+    setup_directories()
     
-    # ROC Curve
-    fpr, tpr, _ = roc_curve(y_true, y_scores)
-    roc_auc = auc(fpr, tpr)
-    plt.figure()
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
-    plt.legend(loc="lower right")
-    plt.savefig(os.path.join(save_dir, 'roc_curve.png'))
-    plt.close()
+    # Set device and enable mixed precision training for L4 GPU
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    scaler = amp.GradScaler()
+    
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        # Enable cuDNN auto-tuner and benchmarking
+        cudnn.benchmark = True
+        cudnn.deterministic = False
+        # Empty CUDA cache
+        torch.cuda.empty_cache()
 
-    # Confusion Matrix
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.xlabel('Predicted')
-    plt.ylabel('True')
-    plt.title('Confusion Matrix')
-    plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
-    plt.close()
+    # Data transforms with augmentation
+    data_transforms = {
+        'train': transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                               std=[0.229, 0.224, 0.225])
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                               std=[0.229, 0.224, 0.225])
+        ])
+    }
 
-    # Save Classification Report
-    report = classification_report(y_true, y_pred, target_names=['Male', 'Female'])
-    with open(os.path.join(save_dir, 'classification_report.txt'), 'w') as f:
-        f.write(report)
+    # Dataset paths
+    data_dir = 'new_dataset/Dataset'
+    train_dir = os.path.join(data_dir, 'Train')
+    val_dir = os.path.join(data_dir, 'Validation')
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, timestamp, num_epochs=45, device='cuda'):
-    model = model.to(device)
-    best_acc = 0.0
+    # Load datasets
+    train_dataset = datasets.ImageFolder(train_dir, data_transforms['train'])
+    val_dataset = datasets.ImageFolder(val_dir, data_transforms['val'])
+
+    # Calculate optimal batch size based on GPU memory
+    # L4 has 24GB VRAM, we'll use a larger batch size
+    batch_size = 256  # Increased for L4 GPU
+
+    # Create data loaders with optimized settings for L4 GPU
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size,
+        shuffle=True, 
+        num_workers=8,  # Increased for better CPU utilization
+        pin_memory=True,
+        prefetch_factor=2,  # Prefetch 2 batches per worker
+        persistent_workers=True  # Keep workers alive between epochs
+    )
     
-    # Initialize mixed precision training
-    scaler = GradScaler()
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size,
+        shuffle=False, 
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    # Load model with memory optimization
+    model = models.resnet50(pretrained=True)
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, 2)
+    model = model.to(device, memory_format=torch.channels_last)  # Optimize memory layout
     
-    # Initialize TensorBoard writer
-    writer = SummaryWriter(f'runs/gender_detection_{timestamp}')
+    # Enable channels last memory format for better performance
+    model = model.to(memory_format=torch.channels_last)
+
+    # Loss function and optimizer with gradient clipping
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=0.001,
+        weight_decay=0.01,
+        eps=1e-8
+    )
     
-    # Create log file
-    log_file = f'training_log_{timestamp}.csv'
+    # Gradient clipping
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     
-    with open(log_file, 'w', newline='') as f:
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min',
+        factor=0.1,
+        patience=3,
+        verbose=True
+    )
+
+    # Logging setup
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_filename = os.path.join('logs', f'training_log_{current_time}.csv')
+    writer = SummaryWriter(f'runs/gender_detection_{current_time}')
+
+    # CSV header
+    csv_header = ['Epoch', 'Train Loss', 'Train Acc', 'Val Loss', 'Val Acc', 
+                 'Learning Rate', 'Best Val Acc']
+    
+    with open(log_filename, 'w', newline='') as f:
         writer_csv = csv.writer(f)
-        writer_csv.writerow(['Epoch', 'Train Loss', 'Train Acc', 'Val Loss', 'Val Acc', 'GPU Memory Used'])
+        writer_csv.writerow(csv_header)
+
+    # Training parameters
+    num_epochs = 30
+    best_val_acc = 0.0
+    train_losses, val_losses = [], []
+    train_accs, val_accs = [], []
     
+    print("Starting training...")
     for epoch in range(num_epochs):
-        print(f'Epoch {epoch+1}/{num_epochs}')
-        print('-' * 10)
-        
         # Training phase
         model.train()
         running_loss = 0.0
-        running_corrects = 0
-        
-        for inputs, labels in tqdm(train_loader, desc='Training'):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+        correct = 0
+        total = 0
+
+        train_bar = tqdm(train_loader, desc=f'Training Epoch {epoch+1}/{num_epochs}')
+        for inputs, labels in train_bar:
+            # Move inputs to channels last format for better performance
+            inputs = inputs.to(device, memory_format=torch.channels_last, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
             
             # Mixed precision training
-            with autocast():
+            with amp.autocast():
                 outputs = model(inputs)
-                _, preds = torch.max(outputs, 1)
                 loss = criterion(outputs, labels)
             
-            # Scale loss and call backward
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
+
+            running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
             
-            running_loss += loss.item() * inputs.size(0)
-            running_corrects += torch.sum(preds == labels.data)
-            
-            # Clear cache periodically
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
-        epoch_loss = running_loss / len(train_loader.dataset)
-        epoch_acc = running_corrects.double() / len(train_loader.dataset)
-        
-        # Get GPU memory usage
-        gpu_memory = 0
-        if torch.cuda.is_available():
-            gpu_memory = torch.cuda.memory_allocated() / 1024**2  # Convert to MB
-            print_gpu_utilization()
-        
-        # Log to TensorBoard
-        writer.add_scalar('Loss/train', epoch_loss, epoch)
-        writer.add_scalar('Accuracy/train', epoch_acc, epoch)
-        writer.add_scalar('GPU Memory (MB)', gpu_memory, epoch)
-        
-        print(f'Training Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
-        
+            # Update progress bar
+            train_bar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{100.*correct/total:.2f}%'
+            })
+
+        train_loss = running_loss / len(train_loader)
+        train_acc = 100. * correct / total
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+
         # Validation phase
         model.eval()
-        val_running_loss = 0.0
-        val_running_corrects = 0
-        
-        all_labels = []
-        all_preds = []
-        all_scores = []
-        
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        all_val_preds = []
+        all_val_labels = []
+
         with torch.no_grad():
-            for inputs, labels in tqdm(val_loader, desc='Validation'):
-                inputs = inputs.to(device)
-                labels = labels.to(device)
+            val_bar = tqdm(val_loader, desc=f'Validation Epoch {epoch+1}/{num_epochs}')
+            for inputs, labels in val_bar:
+                inputs = inputs.to(device, memory_format=torch.channels_last, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
                 
-                with autocast():
-                    outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
-                    loss = criterion(outputs, labels)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+                val_loss += loss.item()
+                _, predicted = outputs.max(1)
+                val_total += labels.size(0)
+                val_correct += predicted.eq(labels).sum().item()
                 
-                all_labels.extend(labels.cpu().numpy())
-                all_preds.extend(preds.cpu().numpy())
-                all_scores.extend(torch.softmax(outputs, dim=1)[:, 1].cpu().numpy())
+                # Store predictions for confusion matrix
+                all_val_preds.extend(predicted.cpu().numpy())
+                all_val_labels.extend(labels.cpu().numpy())
                 
-                val_running_loss += loss.item() * inputs.size(0)
-                val_running_corrects += torch.sum(preds == labels.data)
-        
-        val_epoch_loss = val_running_loss / len(val_loader.dataset)
-        val_epoch_acc = val_running_corrects.double() / len(val_loader.dataset)
-        
-        # Log to TensorBoard
-        writer.add_scalar('Loss/val', val_epoch_loss, epoch)
-        writer.add_scalar('Accuracy/val', val_epoch_acc, epoch)
-        
-        print(f'Validation Loss: {val_epoch_loss:.4f} Acc: {val_epoch_acc:.4f}')
-        
-        # Log the results to CSV
-        with open(log_file, 'a', newline='') as f:
+                # Update progress bar
+                val_bar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'acc': f'{100.*val_correct/val_total:.2f}%'
+                })
+
+        val_loss = val_loss / len(val_loader)
+        val_acc = 100. * val_correct / val_total
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+
+        # Log metrics
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('Accuracy/train', train_acc, epoch)
+        writer.add_scalar('Accuracy/val', val_acc, epoch)
+        writer.add_scalar('Learning_rate', current_lr, epoch)
+
+        # Save to CSV
+        with open(log_filename, 'a', newline='') as f:
             writer_csv = csv.writer(f)
-            writer_csv.writerow([epoch+1, epoch_loss, epoch_acc.item(), 
-                           val_epoch_loss, val_epoch_acc.item(), gpu_memory])
-        
+            writer_csv.writerow([
+                epoch + 1, train_loss, train_acc, 
+                val_loss, val_acc, current_lr, best_val_acc
+            ])
+
+        print(f'\nEpoch {epoch+1}/{num_epochs}:')
+        print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
+        print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
+        print(f'Learning Rate: {current_lr}')
+
         # Save best model
-        if val_epoch_acc > best_acc:
-            best_acc = val_epoch_acc
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': val_epoch_loss,
-                'accuracy': val_epoch_acc,
-            }, 'gender_detection_model.pt')
-            
-            # Generate and save metrics for best model
-            plot_metrics(all_labels, all_preds, all_scores)
-        
-        # Garbage collection
-        gc.collect()
+                'val_acc': val_acc,
+                'val_loss': val_loss,
+            }, os.path.join('models', 'gender_detection_model.pt'))
+            print(f'Model saved with validation accuracy: {val_acc:.2f}%')
+
+        # Update learning rate
+        scheduler.step(val_loss)
+
+        # Generate plots every 5 epochs and at the end
+        if (epoch + 1) % 5 == 0 or epoch == num_epochs - 1:
+            plot_training_curves(train_losses, val_losses, train_accs, val_accs)
+            if epoch == num_epochs - 1:
+                classes = ['Female', 'Male']
+                plot_confusion_matrix(all_val_labels, all_val_preds, classes)
+                
+                # Generate and save classification report
+                report = classification_report(all_val_labels, all_val_preds, 
+                                            target_names=classes)
+                with open(os.path.join('metrics', 'classification_report.txt'), 'w') as f:
+                    f.write(report)
+
+        # Memory cleanup at the end of each epoch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    
+
     writer.close()
-    return model
+    print("\nTraining completed!")
+    print(f"Best validation accuracy: {best_val_acc:.2f}%")
+    print(f"Training logs saved to: {log_filename}")
+    print("Visualization metrics saved in 'metrics' directory")
 
-def export_to_onnx(model, sample_input, output_path):
-    model.eval()
-    torch.onnx.export(model,
-                     sample_input,
-                     output_path,
-                     export_params=True,
-                     opset_version=11,
-                     do_constant_folding=True,
-                     input_names=['input'],
-                     output_names=['output'],
-                     dynamic_axes={'input': {0: 'batch_size'},
-                                 'output': {0: 'batch_size'}})
-
-if __name__ == "__main__":
-    # Set device and optimize CUDA settings
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-    print(f"Using device: {device}")
-    
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA Version: {torch.version.cuda}")
-        print_gpu_utilization()
-
-    # Create timestamp for this training run
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-    # Data transformation
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                           std=[0.229, 0.224, 0.225])
-    ])
-
-    # Load dataset
-    print("Loading dataset...")
-    dataset_path = "UTKFace"
-    image_paths, labels = load_dataset(dataset_path)
-    
-    # Split dataset
-    train_paths, val_paths, train_labels, val_labels = train_test_split(
-        image_paths, labels, test_size=0.2, random_state=42
-    )
-
-    # Create data loaders with pin_memory for faster GPU transfer
-    train_dataset = GenderDataset(train_paths, train_labels, transform)
-    val_dataset = GenderDataset(val_paths, val_labels, transform)
-    
-    train_loader = DataLoader(train_dataset, batch_size=64,  # Increased batch size for A10G
-                            shuffle=True, num_workers=4,
-                            pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=64,
-                          shuffle=False, num_workers=4,
-                          pin_memory=True, persistent_workers=True)
-
-    # Create and train model
-    print("Creating model...")
-    model = create_model(pretrained=True)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-    print("Training model...")
-    model = train_model(model, train_loader, val_loader, criterion, optimizer, timestamp, num_epochs=45, device=device)
-
-    # Export to ONNX
-    print("Exporting to ONNX...")
-    dummy_input = torch.randn(1, 3, 224, 224, device=device)
-    export_to_onnx(model, dummy_input, 'gender_detection_model.onnx')
-    
-    print("Training complete! Models saved as:")
-    print("- gender_detection_model.pt (PyTorch format)")
-    print("- gender_detection_model.onnx (ONNX format)")
-    print(f"Training logs saved in training_log_{timestamp}.csv")
-
-    # Final GPU utilization
-    if torch.cuda.is_available():
-        print("\nFinal GPU Status:")
-        print_gpu_utilization()
+if __name__ == '__main__':
+    train_model()

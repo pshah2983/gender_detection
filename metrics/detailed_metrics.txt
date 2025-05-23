@@ -1,0 +1,12 @@
+Detailed Model Metrics
+====================
+
+Total images evaluated: 20001
+Overall accuracy: 99.04%
+ROC AUC Score: 0.9994
+Processing time: 24.43 seconds
+GPU: NVIDIA L4
+
+Confusion Matrix:
+[[11450    92]
+ [  100  8359]]
