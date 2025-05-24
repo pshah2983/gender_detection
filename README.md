@@ -68,7 +68,7 @@ Male          0.99      0.99      0.99      8,459
 *Shows the model's training and validation accuracy over epochs, highlighting the consistently high performance and minimal generalization gap.*
 
 #### Learning Curves
-![Learning Curves](performance_analysis/combined_training_metrics.png)
+![Learning Curves](performance_analysis/learning_curves.png)
 *Displays the loss curves, accuracy progress, learning rate evolution, and generalization gap analysis.*
 
 #### Model Evaluation
